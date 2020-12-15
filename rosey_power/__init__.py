@@ -9,41 +9,44 @@ __version__ = '0.20201211'
 #######################################################################################################################
 # Score Functions
 #######################################################################################################################
-def _make_test_two_tailed(score, two_tail):
-    return abs(score) if two_tail else score
+def _make_test_two_tailed(func):
+    def two_tail_func(group_treatment: np.ndarray, group_control: np.ndarray):
+        return abs(func(group_treatment, group_control))
+    return two_tail_func
 
 
-def difference_in_means(group_treatment: np.ndarray, group_control: np.ndarray, two_tail=False):
-    return _make_test_two_tailed(
-        group_treatment.mean() - group_control.mean(),
-        two_tail
-    )
+def difference_in_means(group_treatment: np.ndarray, group_control: np.ndarray):
+    return group_treatment.mean() - group_control.mean()
 
 
-def difference_in_var(group_treatment: np.ndarray, group_control: np.ndarray, two_tail=False):
-    return _make_test_two_tailed(
-        group_treatment.std() - group_control.std(),
-        two_tail
-    )
+def difference_in_var(group_treatment: np.ndarray, group_control: np.ndarray):
+    return group_treatment.std() - group_control.std()
 
 
 #######################################################################################################################
 # Power Analysis
 #######################################################################################################################
-class PowerAnalysis:
-    def __init__(self, group_treatment: np.ndarray, group_control: np.ndarray, lift_sweep=None):
-        self.group_treatment = group_treatment
-        self.group_control = group_control
+class ExactPowerAnalysis:
+    def __init__(
+            self,
+            treatment: np.ndarray, control: np.ndarray,
+            lift_effect_size_sweep=None, absolute_effect_size_sweep=None,
+            is_two_tail=False
+    ):
+        self.group_treatment = treatment
+        self.group_control = control
+        self.is_two_tail = is_two_tail
 
-        if lift_sweep is None:
-            lift_sweep = np.linspace(0.01, 1.0)
-        self.lift_sweep = lift_sweep
+        if lift_effect_size_sweep is not None and absolute_effect_size_sweep is not None:
+            raise ValueError('Both lift and absolute effect sizes cannot be simultaneously set')
+        self.lift_effect_size_sweep = lift_effect_size_sweep
+        self.absolute_effect_size_sweep = absolute_effect_size_sweep
 
         self.results = None
         self._null_dists = []
         self._alt_dists = []
 
-    def run(self, func=difference_in_means, alpha=0.05, n_iter=1000, verbose=False):
+    def run(self, n_iter=1000, alpha=0.05, func=difference_in_means, verbose=False):
         """
         `func` must be some function that can be used to compare Group A & Group B that also returns a number
 
@@ -56,15 +59,30 @@ class PowerAnalysis:
         power_given_lift = []
         self._null_dists = []
         self._alt_dists = []
-        progressor = tqdm(self.lift_sweep) if verbose else self.lift_sweep
+        func = _make_test_two_tailed(func) if self.is_two_tail else func
+
+        # Select kind of sweep if any
+        if self.lift_effect_size_sweep is None and self.absolute_effect_size_sweep is None:
+            sweep = [0]
+        elif self.lift_effect_size_sweep is not None:
+            sweep = self.lift_effect_size_sweep
+        elif self.absolute_effect_size_sweep is not None:
+            sweep = self.absolute_effect_size_sweep
+        else:
+            raise ValueError('Check lift_effect_size_sweep and absolute_effect_size_sweep')  # not the great error
+
+        progressor = tqdm(sweep) if verbose else sweep
         # TODO (10-Dec-20) technically, since the only that changes on the parameter sweep is the treatment shift then a lot of this duplication is not necessary
         # TODO (10-Dec-20) therefore, it is probably best to swap the inner and outer loops
-        for lift_i in progressor:
+        for effect_size in progressor:
             null_dist, alt_dist = [], []
-            group_pooled = np.hstack([self.group_treatment, self.group_control])
-            group_control = self.group_control.copy()
             for j in range(n_iter):
-                group_treatment = self.group_treatment.copy() * (1+lift_i)
+                if self.lift_effect_size_sweep is not None:
+                    group_treatment = self.group_treatment.copy() * (1+effect_size)
+                else:
+                    group_treatment = self.group_treatment.copy() + effect_size
+                group_control = self.group_control.copy()
+                group_pooled = np.hstack([group_treatment, group_control])
 
                 # Permute for null distribution
                 shuffled_indices = np.random.choice(
@@ -105,4 +123,4 @@ class PowerAnalysis:
         # Finally check power given lift
         power_given_lift = np.array(power_given_lift)
         self.results = pd.DataFrame(power_given_lift, columns=['power'])
-        self.results['lift'] = self.lift_sweep
+        self.results['added_lift' if self.lift_effect_size_sweep is not None else 'added_effect_size'] = sweep
