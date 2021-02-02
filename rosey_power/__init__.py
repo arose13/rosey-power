@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from scipy import stats
 
 
-__version__ = '0.20201217'
+__version__ = '0.20210202'
 
 
 #######################################################################################################################
@@ -22,6 +23,41 @@ def difference_in_means(group_treatment: np.ndarray, group_control: np.ndarray):
 def difference_in_var(group_treatment: np.ndarray, group_control: np.ndarray):
     return group_treatment.std() - group_control.std()
 
+
+#######################################################################################################################
+# Simple Power Analysis
+#######################################################################################################################
+def power_difference_in_proportion(p1, p2, n1, n2, n_iter=10000, full_output=False):
+    """
+    Checks the probability of detecting
+    p_2 > p_1
+
+    :param p1:
+    :param p2:
+    :param n1:
+    :param n2:
+    :param n_iter: Number of simulated runs
+    :param full_output: if true => (power, beta distribution) is returned
+    :return:
+    """
+    assert 0 < p1 < 1
+    assert 0 < p2 < 1
+    assert n1 > 0
+    assert n2 > 0
+
+    runs_1: np.ndarray = stats.binom(n=n1, p=p1).rvs(n_iter) / n1
+    runs_2: np.ndarray = stats.binom(n=n2, p=p2).rvs(n_iter) / n2
+
+    if p2 >= p1:
+        power = (runs_2 > runs_1).mean()
+    else:
+        power = (runs_1 > runs_2).mean()
+
+    if full_output:
+        delta_p_dist = runs_2 - runs_1
+        return power, delta_p_dist
+    else:
+        return power
 
 #######################################################################################################################
 # Power Analysis
